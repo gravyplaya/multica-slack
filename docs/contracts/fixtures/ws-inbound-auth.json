@@ -1,0 +1,6 @@
+{
+  "type": "auth",
+  "payload": {
+    "token": "eyJhbG...VCJ9.<redacted-payload>.<redacted-signature>"
+  }
+}

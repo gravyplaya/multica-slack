@@ -1,0 +1,106 @@
+{
+  "_about": "Fixture metadata for docs/contracts/fixtures/*.json. Each fixture file is a pure redacted wire-shape sample; documentation lives here so the JSON files can be parsed as if they came off the wire. See scripts/validate-fixtures.mjs for invariants enforced at lint time.",
+  "_shape": {
+    "id": "Stable fixture id; matches the file stem.",
+    "kind": "rest-response | ws-frame-inbound | ws-frame-outbound.",
+    "resource": "For REST: the response type. For WS frames: the event/frame type.",
+    "source": "Upstream handler/path this sample was read from.",
+    "redaction": "What was scrubbed before publication.",
+    "direction": "For WS frames only: 'client -> server' or 'server -> client'.",
+    "scope": "For WS frames only: which scope receives this frame (workspace | user | task | chat | n/a)."
+  },
+  "fixtures": [
+    {
+      "id": "auth-verify-code-response",
+      "kind": "rest-response",
+      "resource": "auth/verify-code",
+      "source": "server/internal/handler/auth.go VerifyCode",
+      "redaction": "JWT truncated to header.payload.signature shape; signature is redacted. Embedded user object is a redacted copy of user-response.json."
+    },
+    {
+      "id": "issue-response",
+      "kind": "rest-response",
+      "resource": "IssueResponse",
+      "source": "server/internal/handler/issue.go issueToResponse",
+      "redaction": "All UUIDs synthetic; description redacted."
+    },
+    {
+      "id": "comment-response",
+      "kind": "rest-response",
+      "resource": "CommentResponse",
+      "source": "server/internal/handler/comment.go commentToResponse",
+      "redaction": "Synthetic UUIDs; bodies shortened."
+    },
+    {
+      "id": "agent-response",
+      "kind": "rest-response",
+      "resource": "AgentResponse",
+      "source": "server/internal/handler/agent.go agentToResponse",
+      "redaction": "Custom env + MCP config are server-redacted; the fixture mirrors the redacted shape."
+    },
+    {
+      "id": "user-response",
+      "kind": "rest-response",
+      "resource": "UserResponse",
+      "source": "server/internal/handler/auth.go userToResponse",
+      "redaction": "All UUIDs are synthetic; names and emails are placeholders."
+    },
+    {
+      "id": "workspace-response",
+      "kind": "rest-response",
+      "resource": "WorkspaceResponse",
+      "source": "server/internal/handler/workspace.go workspaceToResponse",
+      "redaction": "Synthetic UUIDs only."
+    },
+    {
+      "id": "reaction-response",
+      "kind": "rest-response",
+      "resource": "ReactionResponse",
+      "source": "server/internal/handler/reaction.go reactionToResponse",
+      "redaction": "Synthetic UUIDs."
+    },
+    {
+      "id": "attachment-response",
+      "kind": "rest-response",
+      "resource": "AttachmentResponse",
+      "source": "server/internal/handler/file.go attachmentToResponse",
+      "redaction": "Synthetic UUIDs; download URLs are placeholders."
+    },
+    {
+      "id": "ws-inbound-auth",
+      "kind": "ws-frame-inbound",
+      "resource": "auth",
+      "direction": "client -> server",
+      "scope": "n/a",
+      "source": "server/internal/realtime/hub.go firstMessageAuth path",
+      "redaction": "JWT truncated to header.payload.signature shape; signature is redacted. This is the only frame a bearer-only client may send before auth_ack."
+    },
+    {
+      "id": "ws-inbound-subscribe",
+      "kind": "ws-frame-inbound",
+      "resource": "subscribe",
+      "direction": "client -> server",
+      "scope": "task",
+      "source": "server/internal/realtime/hub.go handleFrame",
+      "redaction": "Synthetic UUID; no payload fields contain secrets."
+    },
+    {
+      "id": "ws-outbound-comment-created",
+      "kind": "ws-frame-outbound",
+      "resource": "comment:created",
+      "direction": "server -> client",
+      "scope": "workspace",
+      "source": "server/internal/handler/comment.go CreateComment publish path",
+      "redaction": "Embedded comment + issue summary are redacted copies of comment-response.json + issue-response.json so the wire frame stands on its own."
+    },
+    {
+      "id": "ws-outbound-issue-updated",
+      "kind": "ws-frame-outbound",
+      "resource": "issue:updated",
+      "direction": "server -> client",
+      "scope": "workspace",
+      "source": "server/internal/handler/issue.go UpdateIssue publish path",
+      "redaction": "Embedded issue is a redacted copy of issue-response.json so the wire frame stands on its own."
+    }
+  ]
+}

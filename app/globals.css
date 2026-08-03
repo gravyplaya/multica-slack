@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+/* Multica Slack — Stage 1 design tokens.
+ *
+ * Dark-first, compact, high-contrast. The visual language is independently
+ * recreated (not copied from Buzz); Stage 3 will expand this with the real
+ * semantic palette and shadcn primitives. The variables below are kept as
+ * plain CSS custom properties so the temporary landing page can render
+ * without relying on Tailwind utility classes.
+ */
+@theme {
+  --color-canvas: #0b0d10;
+  --color-sidebar: #111418;
+  --color-elevated: #181c22;
+  --color-border: #232932;
+  --color-border-strong: #2d3540;
+  --color-fg: #e6e8ec;
+  --color-fg-muted: #9aa3b0;
+  --color-fg-subtle: #6b7280;
+  --color-accent: #4c8bf5;
+  --color-accent-fg: #ffffff;
+  --color-success: #2ea043;
+  --color-warning: #d29922;
+  --color-danger: #f85149;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+:root {
+  --shell-pad: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-fg);
+  background: var(--color-canvas);
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}

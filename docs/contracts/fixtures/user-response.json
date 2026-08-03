@@ -1,0 +1,14 @@
+{
+  "id": "11111111-1111-4111-8111-111111111111",
+  "name": "Sample User",
+  "email": "user@example.test",
+  "avatar_url": null,
+  "language": "en",
+  "timezone": "America/Los_Angeles",
+  "onboarded_at": "2026-07-01T12:00:00Z",
+  "onboarding_questionnaire": {},
+  "starter_content_state": "completed",
+  "profile_description": "",
+  "created_at": "2026-07-01T12:00:00Z",
+  "updated_at": "2026-07-15T09:00:00Z"
+}
