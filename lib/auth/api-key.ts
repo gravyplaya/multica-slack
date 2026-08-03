@@ -83,15 +83,24 @@ export function validateApiKeyShape(raw: string): ApiKeyValidation {
  * The caller passes a `MulticaClient` already configured with a
  * `fetchImpl` so this function works in both the browser (where the
  * default `fetch` is fine) and tests (where we inject a mock).
+ *
+ * Concurrency contract: the supplied client's session is NEVER
+ * mutated. The probe runs against a throwaway `MulticaClient`
+ * produced by `client.cloneForProbe(probeSession)`, which reuses
+ * the caller's `fetchImpl` and `ClientConfig` but binds a fresh
+ * session. This eliminates the credential-leak hazard where a
+ * concurrent query refetch on the shared client would otherwise
+ * race the probe's swap/restore and observe the candidate API key
+ * on its `Authorization` header.
  */
 export async function signInWithApiKey(params: {
   apiKey: string;
   backendOrigin: string;
   /**
    * A MulticaClient used to validate the credential against
-   * `GET /api/me`. The function replaces its session with the API-key
-   * session for the probe, then restores it before returning so the
-   * caller's client is unchanged.
+   * `GET /api/me`. The caller's client is read-only here — its
+   * session, workspace, fetchImpl, and config are *snapshot* into
+   * a throwaway probe client for the duration of the probe.
    */
   client: MulticaClient;
 }): Promise<SessionState> {
@@ -107,14 +116,16 @@ export async function signInWithApiKey(params: {
     user: null,
   };
 
-  // Swap the client's session for the probe session, run the probe,
-  // and restore the original session on the way out so the caller's
-  // client remains in the state they handed us.
-  const original = params.client.getSession();
-  params.client.setSession(probeSession);
+  // Snapshot the caller's wiring into a throwaway probe client. The
+  // shared client is never mutated, so any concurrent request that
+  // races the probe sees the original session, not the candidate API
+  // key. (If the caller did pass a fetchImpl that records requests,
+  // the recorded Authorization header for this probe is the probe
+  // API key — that's what the test asserts.)
+  const probeClient = params.client.cloneForProbe(probeSession);
   let user: UserView;
   try {
-    const wire = await params.client.getCurrentUser();
+    const wire = await probeClient.getCurrentUser();
     user = {
       id: wire.id,
       name: wire.name,
@@ -133,8 +144,6 @@ export async function signInWithApiKey(params: {
       );
     }
     throw cause;
-  } finally {
-    params.client.setSession(original);
   }
 
   return { ...probeSession, user };
@@ -157,14 +166,22 @@ export class InvalidApiKeyError extends Error {
  * session and any persisted `localStorage` entry. Returns a boolean
  * indicating whether anything was actually cleared — useful for
  * tests, and harmless for production code.
+ *
+ * Hard rule: this helper only clears API-key sessions. If the
+ * current session is OAuth (or the store is empty), the store is
+ * left untouched and the function returns `false`. This prevents
+ * silent data loss when a shared "Sign out" button reaches the
+ * wrong helper for an OAuth-signed-in user — the OAuth session
+ * must be cleared by the OAuth sign-out path, not here.
  */
 export function signOutAndClearApiKey(store: {
   clear(): void;
   get(): SessionState | null;
 }): boolean {
   const before = store.get();
+  if (!before || before.source !== "api-key") return false;
   store.clear();
-  return before !== null && before.source === "api-key";
+  return true;
 }
 
 /**

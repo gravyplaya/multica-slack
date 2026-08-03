@@ -302,4 +302,49 @@ describe("MulticaClient.requestJson", () => {
     expect(calls[0]!.url).toContain("/auth/logout");
     expect(calls[0]!.headers["authorization"]).toBeUndefined();
   });
+
+  it("drops caller-supplied attempts to overwrite reserved headers", async () => {
+    // Regression (TAV-40 / Suggestion): the previous `extra` merge
+    // loop only skipped `Content-Type`, so a caller-supplied
+    // `headers: { Authorization: "Bearer other" }` silently
+    // shadowed the session credential. The fix maintains a
+    // case-insensitive reserved-header allow-list and drops anything
+    // that matches.
+    const session = makeSession();
+    const otherPat = "mul_DEADBEEFDEADBEEFDEAD";
+    const { fetch, calls } = makeFetchMock([{ status: 200, body: [] }]);
+    const client = new MulticaClient({
+      session,
+      workspace: { workspaceId: "ws-1", workspaceSlug: "acme" },
+      fetchImpl: fetch,
+    });
+    await client.listWorkspaces({
+      headers: {
+        // Each of these should be dropped — the session/workspace
+        // values must survive.
+        Authorization: `Bearer ${otherPat}`,
+        "authorization": `Bearer ${otherPat}`,
+        "X-Workspace-Slug": "shadowed",
+        "X-Workspace-Id": "shadowed",
+        "X-Client-Platform": "shadowed",
+        "X-Client-Version": "shadowed",
+        "X-Client-OS": "shadowed",
+        Cookie: "shadowed=1",
+        // Content-Type is honoured (the early branch picks it up),
+        // but is documented as reserved.
+        "Content-Type": "application/json",
+        // Non-reserved custom headers survive — this is the
+        // `Idempotency-Key` shape the review called out.
+        "Idempotency-Key": "abc-123",
+      },
+    });
+    const call = calls[0]!;
+    expect(call.headers["authorization"]).toBe(`Bearer ${PAT}`);
+    expect(call.headers["authorization"]).not.toBe(`Bearer ${otherPat}`);
+    expect(call.headers["x-workspace-slug"]).toBe("acme");
+    expect(call.headers["x-workspace-slug"]).not.toBe("shadowed");
+    expect(call.headers["x-client-platform"]).toBe("multica-slack-web");
+    expect(call.headers["cookie"]).toBeUndefined();
+    expect(call.headers["idempotency-key"]).toBe("abc-123");
+  });
 });

@@ -55,7 +55,18 @@ export interface RequestOptions {
   query?: Record<string, string | number | boolean | null | undefined>;
   /** Override the JSON body; if omitted we send `{}`. */
   body?: unknown;
-  /** Extra headers — credentials are never accepted here. */
+  /**
+   * Extra headers — credentials are never accepted here. Only the
+   * non-auth headers listed in `CALLER_SETTABLE_HEADERS` (see
+   * below) are honoured; any attempt to set a reserved header such
+   * as `Authorization`, `X-Workspace-Slug`, `X-Workspace-Id`,
+   * `X-Client-*`, `Cookie`, or `Content-Type` is silently dropped
+   * (the client still emits the auth-owned value). The match is
+   * case-insensitive.
+   *
+   * Stage 2 review (TAV-40) added this allow-list so callers cannot
+   * quietly shadow the session credential.
+   */
   headers?: Record<string, string>;
   /**
    * Public request: omit the `Authorization` and `X-Workspace-*`
@@ -65,6 +76,34 @@ export interface RequestOptions {
    */
   unauthenticated?: boolean;
 }
+
+/**
+ * Headers the request pipeline owns. A caller-supplied `headers`
+ * option that tries to set any of these is silently dropped during
+ * the merge so the client cannot be tricked into carrying a
+ * different credential or workspace context than the session it was
+ * constructed with. The match is case-insensitive.
+ *
+ * - `Content-Type` is special: the caller may set it via the
+ *   separate "Content-Type" key in `RequestOptions.headers` and the
+ *   client will pick it up, since it is the only caller-relevant
+ *   header we currently understand. We still list it here so the
+ *   merge loop treats it consistently with the others.
+ * - `X-Workspace-Slug` and `X-Workspace-Id` are both reserved even
+ *   though only the slug is emitted today — defending against a
+ *   future call site that adds the id branch and forgetting to
+ *   extend this list.
+ */
+export const RESERVED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
+  "authorization",
+  "x-workspace-slug",
+  "x-workspace-id",
+  "x-client-platform",
+  "x-client-version",
+  "x-client-os",
+  "cookie",
+  "content-type",
+]);
 
 interface InternalRequestInit extends RequestOptions {
   method: string;
@@ -124,6 +163,33 @@ export class MulticaClient {
   /** Set or clear the workspace selection. */
   setWorkspace(next: WorkspaceSelection | null): void {
     this.workspace = next;
+  }
+
+  // ---------------------------------------------------------------------
+  // Internal cloning surface (sign-in probes)
+  // ---------------------------------------------------------------------
+
+  /**
+   * Snapshot the wiring of this client so a probe (e.g. the API-key
+   * `GET /api/me` validation call) can be served by a throwaway
+   * `MulticaClient` rather than mutating this instance's session.
+   * The probe runs against the same `fetch` and the same
+   * `ClientConfig` but binds a fresh session, so the shared client
+   * never carries the candidate credential.
+   *
+   * This is the load-bearing fix for the API-key probe concurrency
+   * hazard called out in the Stage 2 review (TAV-40): mutating
+   * `setSession` on a shared client leaks the candidate credential
+   * to any concurrent request on the same client and races the
+   * restore.
+   */
+  cloneForProbe(session: SessionState): MulticaClient {
+    return new MulticaClient({
+      session,
+      workspace: this.workspace,
+      config: this.config,
+      fetchImpl: this.fetchImpl,
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -458,7 +524,7 @@ export class MulticaClient {
     // and PATs are exempt per contract section 1.2.
     if (extra) {
       for (const [k, v] of Object.entries(extra)) {
-        if (k === "Content-Type") continue;
+        if (RESERVED_REQUEST_HEADERS.has(k.toLowerCase())) continue;
         headers.set(k, v);
       }
     }

@@ -181,6 +181,95 @@ describe("signInWithApiKey", () => {
       }),
     ).rejects.toThrow(/Could not reach the Multica backend/i);
   });
+
+  it("does not mutate the shared client's session during the probe", async () => {
+    // Regression (TAV-40 / Important #2): the probe used to call
+    // `client.setSession(probeSession)` and restore in `finally`.
+    // That swap is observable to any concurrent caller on the same
+    // client (a React Query refetch, a background request, etc.) —
+    // those requests would carry the candidate API key on their
+    // `Authorization` header. The fix runs the probe against a
+    // throwaway client so the shared session is untouched.
+    const PAT_A = "mul_aaaa1111111111111111";
+    const calls: Array<{ authorization?: string }> = [];
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify(makeWireUser()), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const recordingFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Headers | undefined;
+      calls.push({ authorization: headers?.get?.("authorization") ?? undefined });
+      return fetchImpl(input, init);
+    }) as unknown as typeof fetch;
+
+    const sharedClient = new MulticaClient({
+      session: {
+        source: "oauth",
+        backendOrigin: "http://localhost:8080",
+        token: "eyJhbG...4z9g",
+        user: USER,
+      },
+      fetchImpl: recordingFetch,
+    });
+
+    await signInWithApiKey({
+      apiKey: PAT_A,
+      backendOrigin: "http://localhost:8080",
+      client: sharedClient,
+    });
+    expect(sharedClient.getSession().source).toBe("oauth");
+    expect(sharedClient.getSession().token).toBe("eyJhbG...4z9g");
+    expect(calls[0]?.authorization).toBe(`Bearer ${PAT_A}`);
+  });
+
+  it("two concurrent signInWithApiKey calls each carry their own candidate key", async () => {
+    // Regression (TAV-40 / Important #2, concurrency case). Two
+    // probes against the same shared client must NOT race the
+    // swap/restore: each `GET /api/me` must carry its own candidate
+    // key, not the other's or the prior OAuth token, and the shared
+    // client must end up in its original OAuth state.
+    const PAT_A = "mul_aaaa1111111111111111";
+    const PAT_B = "mul_bbbb2222222222222222";
+
+    const recordedAuths: Array<string | undefined> = [];
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Headers | undefined;
+      recordedAuths.push(headers?.get?.("authorization") ?? undefined);
+      return new Response(JSON.stringify(makeWireUser()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const sharedClient = new MulticaClient({
+      session: {
+        source: "oauth",
+        backendOrigin: "http://localhost:8080",
+        token: "oauth-shared-token",
+        user: USER,
+      },
+      fetchImpl,
+    });
+
+    await Promise.all([
+      signInWithApiKey({
+        apiKey: PAT_A,
+        backendOrigin: "http://localhost:8080",
+        client: sharedClient,
+      }),
+      signInWithApiKey({
+        apiKey: PAT_B,
+        backendOrigin: "http://localhost:8080",
+        client: sharedClient,
+      }),
+    ]);
+
+    // Each probe's outbound request carries the candidate key, not
+    // the other probe's, not the prior OAuth token.
+    expect(recordedAuths).toContain(`Bearer ${PAT_A}`);
+    expect(recordedAuths).toContain(`Bearer ${PAT_B}`);
+    expect(recordedAuths).not.toContain("Bearer oauth-shared-token");
+
+    // Shared client is back in its original OAuth state.
+    expect(sharedClient.getSession().source).toBe("oauth");
+    expect(sharedClient.getSession().token).toBe("oauth-shared-token");
+  });
 });
 
 describe("signOutAndClearApiKey", () => {
@@ -199,13 +288,28 @@ describe("signOutAndClearApiKey", () => {
 
   it("returns false when the cleared session was OAuth", () => {
     const store = new MemorySessionStore();
-    store.set({
+    const oauthSession: SessionState = {
       source: "oauth",
       backendOrigin: "http://localhost:8080",
       token: "eyJhbG...4z9g",
       user: USER,
-    });
+    };
+    store.set(oauthSession);
+    // Regression (TAV-40 / Important #1): the function used to clear
+    // the store unconditionally and only THEN report `false`,
+    // destroying the OAuth session. The fix short-circuits on the
+    // source check, so the OAuth session survives.
     expect(signOutAndClearApiKey(store)).toBe(false);
+    expect(store.get()).toEqual(oauthSession);
+  });
+
+  it("returns false and leaves the store untouched when it is empty", () => {
+    // Regression (TAV-40 / Important #1): the second short-circuit
+    // case — an empty store must not throw, and must stay empty.
+    const store = new MemorySessionStore();
+    expect(store.get()).toBeNull();
+    expect(signOutAndClearApiKey(store)).toBe(false);
+    expect(store.get()).toBeNull();
   });
 
   it("removes the localStorage entry on sign-out", () => {
