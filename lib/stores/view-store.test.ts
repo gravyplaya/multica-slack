@@ -16,6 +16,7 @@ import { createViewStore } from "./view-store";
 describe("view-store", () => {
   it("starts with sensible defaults", () => {
     const store = createViewStore();
+    expect(store.getState().selectedWorkspace).toBeNull();
     expect(store.getState().selectedIssueId).toBeNull();
     expect(store.getState().searchQuery).toBe("");
     expect(store.getState().rightPanelVisible).toBe(true);
@@ -25,6 +26,23 @@ describe("view-store", () => {
       compose: false,
     });
     expect(store.getState().draftsByIssueId).toEqual({});
+  });
+
+  it("selectWorkspace updates the active workspace and clears the channel selection", () => {
+    const store = createViewStore();
+    store.getState().selectIssue("issue-1");
+    store.getState().selectWorkspace({
+      workspaceId: "ws-1",
+      workspaceSlug: "sample",
+    });
+    expect(store.getState().selectedWorkspace).toEqual({
+      workspaceId: "ws-1",
+      workspaceSlug: "sample",
+    });
+    expect(store.getState().selectedIssueId).toBeNull();
+    store.getState().selectWorkspace(null);
+    expect(store.getState().selectedWorkspace).toBeNull();
+    expect(store.getState().selectedIssueId).toBeNull();
   });
 
   it("selectIssue updates the selected channel", () => {
@@ -78,13 +96,15 @@ describe("view-store", () => {
     expect(store.getState().draftsByIssueId).toEqual({});
   });
 
-  it("resetForSignOut wipes drafts, selection, and search", () => {
+  it("resetForSignOut wipes drafts, selection, search, and workspace", () => {
     const store = createViewStore();
     store.getState().setDraft("issue-1", "sensitive draft");
     store.getState().selectIssue("issue-1");
+    store.getState().selectWorkspace({ workspaceId: "ws-1", workspaceSlug: "sample" });
     store.getState().setSearchQuery("something");
     store.getState().resetForSignOut();
     expect(store.getState().selectedIssueId).toBeNull();
+    expect(store.getState().selectedWorkspace).toBeNull();
     expect(store.getState().searchQuery).toBe("");
     expect(store.getState().draftsByIssueId).toEqual({});
     expect(store.getState().openDrawers).toEqual({

@@ -17,9 +17,13 @@
 
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+import type { WorkspaceSelection } from "../types";
+
 export type DrawerId = "sidebar" | "details" | "compose";
 
 export interface ViewState {
+  /** Currently selected workspace. `null` means no workspace chosen yet. */
+  selectedWorkspace: WorkspaceSelection | null;
   /** Currently selected issue (channel). `null` means nothing selected. */
   selectedIssueId: string | null;
   /** Sidebar search query. */
@@ -36,6 +40,7 @@ export interface ViewState {
   draftsByIssueId: Record<string, string>;
 
   // Selectors / mutations
+  selectWorkspace(next: WorkspaceSelection | null): void;
   selectIssue(id: string | null): void;
   setSearchQuery(query: string): void;
   toggleDrawer(id: DrawerId, force?: boolean): void;
@@ -47,6 +52,7 @@ export interface ViewState {
 
 const INITIAL_STATE: Omit<
   ViewState,
+  | "selectWorkspace"
   | "selectIssue"
   | "setSearchQuery"
   | "toggleDrawer"
@@ -55,6 +61,7 @@ const INITIAL_STATE: Omit<
   | "clearDraft"
   | "resetForSignOut"
 > = {
+  selectedWorkspace: null,
   selectedIssueId: null,
   searchQuery: "",
   openDrawers: { sidebar: true, details: false, compose: false },
@@ -65,6 +72,15 @@ const INITIAL_STATE: Omit<
 export function createViewStore(): StoreApi<ViewState> {
   return createStore<ViewState>((set) => ({
     ...INITIAL_STATE,
+    selectWorkspace(next) {
+      set((state) => ({
+        selectedWorkspace: next,
+        selectedIssueId:
+          next && state.selectedWorkspace?.workspaceId === next.workspaceId
+            ? state.selectedIssueId
+            : null,
+      }));
+    },
     selectIssue(id) {
       set({ selectedIssueId: id });
     },
@@ -112,6 +128,8 @@ export function createViewStore(): StoreApi<ViewState> {
  * components can compose them with `useStore(store, selector)` without
  * re-rendering on unrelated state changes.
  */
+export const selectSelectedWorkspace = (s: ViewState): WorkspaceSelection | null =>
+  s.selectedWorkspace;
 export const selectSelectedIssueId = (s: ViewState): string | null => s.selectedIssueId;
 export const selectSearchQuery = (s: ViewState): string => s.searchQuery;
 export const selectRightPanelVisible = (s: ViewState): boolean => s.rightPanelVisible;
