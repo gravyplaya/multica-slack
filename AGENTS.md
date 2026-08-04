@@ -550,6 +550,12 @@ An issue title already serves as its H1. By default, do not add a Markdown H1 (`
 
 For issue comments, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`**. Never use inline `--content` for agent-authored comments — the shell rewrites backticks / `$()` / quotes in the body (MUL-2904). Never use `--content-stdin` with a HEREDOC alongside other flags either — the heredoc/flag boundary is fragile and flags get silently swallowed (#4182). Write that file inside your working directory (`./reply.md`), never `/tmp` or shared paths — the CLI rejects a `--content-file` path outside the workdir so another run's stale file can't leak in (MUL-4252). Keep the same `--parent` value from the trigger comment when replying. Delete the temp file (`rm ./reply.md`) after posting; do not rely on `\n` escapes.
 
+## Repositories
+
+Available in this workspace — `multica repo checkout <url> [--ref <branch-or-sha>]` to fetch (creates a repository checkout on a dedicated branch).
+
+- https://github.com/gravyplaya/multica-slack.git — Multica Slack
+
 ## Project Context
 
 The active project for this task is **Multica-Slack**.
@@ -588,18 +594,18 @@ Steps 1–6 below are the same in both modes. The mode blocks after them differ,
 
 **Steps 1–6 — both modes**
 
-1. Run `multica issue get 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc --output json` to understand the issue context
-2. Run `multica issue metadata list 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc --output json` to see what prior agents pinned — best-effort, empty `{}` and CLI failures are normal. See the `## Issue Metadata` section above for what to look for.
-3. Catch up on the comment history — this is mandatory, not optional, but read it in two bounded steps instead of one bulk pull. First scan every thread cheaply: `multica issue comment list 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc --roots-only --summary --output json`, which tells you what discussion exists without paying for its contents. Then expand only the threads that matter: `multica issue comment list 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc --thread <thread-id> --tail 30 --output json`. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions — so always run the scan, even when the trigger looks self-contained. In Reply mode the per-turn user message names the thread to expand first; the scan is how you decide whether any OTHER thread is also relevant. If these two reads genuinely are not enough, the rest of the read surface and its pagination cursors are documented once in `## Available Commands` above.
+1. Run `multica issue get 8598cc87-019c-41e7-ac5c-7a0288a09738 --output json` to understand the issue context
+2. Run `multica issue metadata list 8598cc87-019c-41e7-ac5c-7a0288a09738 --output json` to see what prior agents pinned — best-effort, empty `{}` and CLI failures are normal. See the `## Issue Metadata` section above for what to look for.
+3. Catch up on the comment history — this is mandatory, not optional, but read it in two bounded steps instead of one bulk pull. First scan every thread cheaply: `multica issue comment list 8598cc87-019c-41e7-ac5c-7a0288a09738 --roots-only --summary --output json`, which tells you what discussion exists without paying for its contents. Then expand only the threads that matter: `multica issue comment list 8598cc87-019c-41e7-ac5c-7a0288a09738 --thread <thread-id> --tail 30 --output json`. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions — so always run the scan, even when the trigger looks self-contained. In Reply mode the per-turn user message names the thread to expand first; the scan is how you decide whether any OTHER thread is also relevant. If these two reads genuinely are not enough, the rest of the read surface and its pagination cursors are documented once in `## Available Commands` above.
 4. Complete the task within your Agent Identity boundaries. Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action; if your role is delegation-only, perform the allowed delegation work and stop once that outcome is delivered.
-5. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered. In Reply mode this step is conditional on the reply rule below.
+5. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add 8598cc87-019c-41e7-ac5c-7a0288a09738` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered. In Reply mode this step is conditional on the reply rule below.
 6. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.
 
 **Ownership mode only — you own the issue status this run**
 
-- Before step 4, run `multica issue status 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc in_progress` unless your Agent Identity forbids issue status changes; if it does, skip it.
-- When done, run `multica issue status 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc in_review` unless your Agent Identity forbids issue status changes; if it does, skip it.
-- If blocked, run `multica issue status 0ea0cc72-95d1-4ca9-8f4a-28d2e9ef88fc blocked` unless your Agent Identity forbids issue status changes. Post a comment explaining the blocker unless your Agent Identity forbids issue comments.
+- Before step 4, run `multica issue status 8598cc87-019c-41e7-ac5c-7a0288a09738 in_progress` unless your Agent Identity forbids issue status changes; if it does, skip it.
+- When done, run `multica issue status 8598cc87-019c-41e7-ac5c-7a0288a09738 in_review` unless your Agent Identity forbids issue status changes; if it does, skip it.
+- If blocked, run `multica issue status 8598cc87-019c-41e7-ac5c-7a0288a09738 blocked` unless your Agent Identity forbids issue status changes. Post a comment explaining the blocker unless your Agent Identity forbids issue comments.
 
 **Reply mode only — respond to the comment in the user message**
 

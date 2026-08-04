@@ -1,6 +1,7 @@
 import { Hash, Menu, PanelRight } from "lucide-react";
 
 import { statusClass, statusLabel } from "./status";
+import { ConnectionIndicator } from "../realtime/ConnectionIndicator";
 import type { IssueView } from "../../lib/types";
 
 export interface ChannelHeaderProps {
@@ -45,6 +46,7 @@ export function ChannelHeader({
           <p>Choose an issue from the navigation to begin.</p>
         </div>
       )}
+      <ConnectionIndicator />
       <button
         className="icon-button"
         type="button"

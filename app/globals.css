@@ -169,6 +169,16 @@ h1, h2, h3, p, dl { margin-top: 0; }
 .presence-dot.blocked { background: var(--color-danger); }
 .presence-dot.unknown { background: var(--color-fg-subtle); }
 
+/* Realtime connection indicator. */
+.connection-indicator { display: inline-flex; align-items: center; gap: 6px; min-height: 16px; padding: 0 6px; border-radius: 99px; color: var(--color-fg-subtle); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+.connection-indicator[data-status="idle"], .connection-indicator[data-status="closed"] { visibility: hidden; }
+.connection-indicator .connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-fg-subtle); box-shadow: 0 0 0 0 transparent; }
+.connection-indicator[data-status="connected"] .connection-dot { background: var(--color-success); box-shadow: 0 0 0 3px rgb(63 185 80 / 18%); }
+.connection-indicator[data-status="connecting"] .connection-dot,
+.connection-indicator[data-status="reconnecting"] .connection-dot { background: var(--color-warning); animation: realtime-pulse 1.4s ease-in-out infinite; box-shadow: 0 0 0 3px rgb(210 153 34 / 16%); }
+.connection-indicator[data-status="failed"] .connection-dot { background: var(--color-danger); box-shadow: 0 0 0 3px rgb(248 81 73 / 18%); }
+@keyframes realtime-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.85); } }
+
 .drawer-scrim { display: none; }
 @keyframes pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 @keyframes spin { to { transform: rotate(360deg); } }
