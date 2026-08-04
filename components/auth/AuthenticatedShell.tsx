@@ -1,236 +1,319 @@
 "use client";
 
-/**
- * Authenticated shell placeholder.
- *
- * Stage 2 owns the data + session foundation; Stage 3 owns the
- * real workspace/sidebar/channel layout. This component proves
- * the gate by:
- *
- * - reading the session through `useSession()` (which subscribes
- *   to the SessionStore mounted by `<Providers>`);
- * - fetching the workspace list via the live MulticaClient to
- *   confirm the credential round-trip;
- * - showing a workspace picker that feeds `setWorkspace` on the
- *   client so the second round of calls (members/issues) include
- *   the right `X-Workspace-Slug` header;
- * - showing the currently authenticated user and a sign-out
- *   button that clears the SessionStore (and the localStorage
- *   entry on the API-key path) plus resets the view store.
- *
- * All credential handling stays in the session layer. The shell
- * itself reads only the fingerprint, not the raw token.
- */
-
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-
-import { signOutAndClearApiKey } from "../../lib/auth/api-key";
-import { useSession, useSessionStore } from "../../lib/auth/use-session";
+import { Hash } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMulticaClient } from "../../hooks/use-multica-client";
+import { MessageComposer } from "../../components/chat/MessageComposer";
+import { ChannelHeader } from "../../components/chat/ChannelHeader";
+import {
+  MessageList,
+  type ParticipantDirectory,
+} from "../../components/chat/MessageList";
+import { Sidebar } from "../../components/layout/Sidebar";
+import { RightSidebar } from "../../components/layout/RightSidebar";
+import { signOutAndClearApiKey } from "../../lib/auth/api-key";
+import { credentialFingerprint } from "../../lib/api/redact";
+import { mapAgent, mapComment, mapIssue, mapUser, mapWorkspace } from "../../lib/mappers";
+import {
+  createOptimisticComment,
+  mergeCommentViews,
+  removeOptimisticComment,
+} from "../../lib/chat/optimistic-comments";
+import { useSession, useSessionStore } from "../../lib/auth/use-session";
 import { useViewStore } from "../../lib/stores/use-view-store";
-import type { WorkspaceSelection } from "../../lib/types";
+import type {
+  AgentView,
+  CommentView,
+  IssueView,
+  UserView,
+  WireComment,
+  WorkspaceSelection,
+  WorkspaceView,
+} from "../../lib/types";
+
+function randomOptimisticId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `optimistic-${crypto.randomUUID()}`;
+  }
+  return `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function mergeCommentLists(...lists: CommentView[][]): CommentView[] {
+  return lists.reduce(
+    (result, list) => list.reduce(mergeCommentViews, result),
+    [] as CommentView[],
+  );
+}
+
+function mapParticipantDirectory(
+  membersData: unknown[] | undefined,
+  agentsData: unknown[] | undefined,
+): ParticipantDirectory {
+  const members = new Map<string, UserView>();
+  for (const row of membersData ?? []) {
+    if (typeof row !== "object" || row === null || !("user" in row)) continue;
+    const user = mapUser((row as { user: unknown }).user);
+    members.set(user.id, user);
+  }
+  const agents = new Map<string, AgentView>();
+  for (const row of agentsData ?? []) {
+    const agent = mapAgent(row);
+    agents.set(agent.id, agent);
+  }
+  return { members, agents };
+}
 
 export function AuthenticatedShell() {
   const session = useSession();
-  const store = useSessionStore();
+  const sessionStore = useSessionStore();
   const client = useMulticaClient();
-  const resetForSignOut = useViewStore((s) => s.resetForSignOut);
-  const [workspace, setWorkspace] = useState<WorkspaceSelection | null>(null);
+  const queryClient = useQueryClient();
+  const selectedWorkspace = useViewStore((state) => state.selectedWorkspace);
+  const selectedIssueId = useViewStore((state) => state.selectedIssueId);
+  const selectWorkspace = useViewStore((state) => state.selectWorkspace);
+  const selectIssue = useViewStore((state) => state.selectIssue);
+  const searchQuery = useViewStore((state) => state.searchQuery);
+  const setSearchQuery = useViewStore((state) => state.setSearchQuery);
+  const draftMap = useViewStore((state) => state.draftsByIssueId);
+  const setDraft = useViewStore((state) => state.setDraft);
+  const clearDraft = useViewStore((state) => state.clearDraft);
+  const resetForSignOut = useViewStore((state) => state.resetForSignOut);
+  const [detailsOpen, setDetailsOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pendingComments, setPendingComments] = useState<Record<string, CommentView[]>>({});
 
+  const sessionKey = session
+    ? credentialFingerprint(session.token)
+    : "signed-out";
   const workspacesQuery = useQuery({
-    queryKey: ["workspaces", session?.backendOrigin ?? ""],
-    // `useMulticaClient` always returns a `MulticaClient` now; the
-    // gate is on the session alone.
+    queryKey: ["workspaces", session?.backendOrigin ?? "", sessionKey],
     queryFn: () => client.listWorkspaces(),
     enabled: Boolean(session),
   });
+  const workspace = selectedWorkspace;
+  const issuesQuery = useQuery({
+    queryKey: ["issues", workspace?.workspaceId ?? "none", sessionKey],
+    queryFn: () => client.listIssues({ query: { limit: 100, offset: 0 } }),
+    enabled: Boolean(session && workspace),
+  });
+  const commentsQuery = useQuery({
+    queryKey: ["comments", selectedIssueId, sessionKey],
+    queryFn: () => client.listComments(selectedIssueId!),
+    enabled: Boolean(session && selectedIssueId),
+  });
+  const membersQuery = useQuery({
+    queryKey: ["members", workspace?.workspaceId ?? "none", sessionKey],
+    queryFn: () => client.listWorkspaceMembers(workspace!.workspaceId),
+    enabled: Boolean(session && workspace),
+  });
+  const agentsQuery = useQuery({
+    queryKey: ["agents", workspace?.workspaceId ?? "none", sessionKey],
+    queryFn: () => client.listAgents(),
+    enabled: Boolean(session && workspace),
+  });
+
+  const workspaces = useMemo<WorkspaceView[]>(
+    () => (workspacesQuery.data ?? []).map((item) => mapWorkspace(item)),
+    [workspacesQuery.data],
+  );
+  const issues = useMemo<IssueView[]>(
+    () => (issuesQuery.data ?? []).map((item) => mapIssue(item)),
+    [issuesQuery.data],
+  );
+  const comments = useMemo<CommentView[]>(
+    () => (commentsQuery.data ?? [])
+      .map((item) => mapComment(item))
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+    [commentsQuery.data],
+  );
+  const directory = useMemo(
+    () => mapParticipantDirectory(membersQuery.data, agentsQuery.data),
+    [agentsQuery.data, membersQuery.data],
+  );
+  const selectedIssue = issues.find((issue) => issue.id === selectedIssueId) ?? null;
+  const visibleComments = useMemo(
+    () => mergeCommentLists(
+      comments,
+      selectedIssueId ? pendingComments[selectedIssueId] ?? [] : [],
+    ),
+    [comments, pendingComments, selectedIssueId],
+  );
+
+  const createComment = useMutation<
+    WireComment,
+    Error,
+    { issueId: string; content: string },
+    { issueId: string; optimisticId: string }
+  >({
+    mutationFn: ({ issueId, content }) => client.createComment(issueId, { content }),
+    onMutate: async ({ issueId, content }) => {
+      await queryClient.cancelQueries({ queryKey: ["comments", issueId, sessionKey] });
+      const optimisticId = randomOptimisticId();
+      const optimistic = createOptimisticComment({
+        id: optimisticId,
+        issueId,
+        content,
+        author: { type: "member", id: session?.user?.id ?? "current-user" },
+      });
+      setPendingComments((current) => ({
+        ...current,
+        [issueId]: [...(current[issueId] ?? []), optimistic],
+      }));
+      return { issueId, optimisticId };
+    },
+    onSuccess: (created, variables, context) => {
+      if (context) {
+        setPendingComments((current) => ({
+          ...current,
+          [context.issueId]: removeOptimisticComment(
+            current[context.issueId] ?? [],
+            context.optimisticId,
+          ),
+        }));
+      }
+      clearDraft(variables.issueId);
+      queryClient.setQueryData<WireComment[] | undefined>(
+        ["comments", variables.issueId, sessionKey],
+        (current) => {
+          const existing = current ?? [];
+          return existing.some((comment) => comment.id === created.id)
+            ? existing.map((comment) => comment.id === created.id ? created : comment)
+            : [...existing, created];
+        },
+      );
+    },
+    onError: (_error, _variables, context) => {
+      if (!context) return;
+      setPendingComments((current) => ({
+        ...current,
+        [context.issueId]: removeOptimisticComment(
+          current[context.issueId] ?? [],
+          context.optimisticId,
+        ),
+      }));
+    },
+  });
+
+  useEffect(() => {
+    if (!selectedWorkspace && workspaces[0]) {
+      const next = {
+        workspaceId: workspaces[0].id,
+        workspaceSlug: workspaces[0].slug,
+      };
+      selectWorkspace(next);
+      client.setWorkspace(next);
+    }
+  }, [client, selectWorkspace, selectedWorkspace, workspaces]);
+
+  useEffect(() => {
+    if (!selectedIssueId && issues[0]) {
+      selectIssue(issues[0].id);
+      return;
+    }
+    if (
+      selectedIssueId &&
+      issues.length > 0 &&
+      !issues.some((issue) => issue.id === selectedIssueId)
+    ) {
+      selectIssue(issues[0].id);
+    }
+  }, [issues, selectIssue, selectedIssueId]);
+
+  function handleWorkspaceChange(next: WorkspaceSelection) {
+    selectWorkspace(next);
+    client.setWorkspace(next);
+    setDetailsOpen(true);
+  }
 
   function handleSignOut() {
-    signOutAndClearApiKey(store);
+    signOutAndClearApiKey(sessionStore);
+    if (sessionStore.get()) sessionStore.clear();
+    client.setWorkspace(null);
     resetForSignOut();
+    queryClient.clear();
   }
 
   if (!session) return null;
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        background: "var(--color-canvas)",
-      }}
-    >
-      <aside
-        style={{
-          width: 280,
-          borderRight: "1px solid var(--color-border)",
-          padding: 20,
-          background: "var(--color-sidebar)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 20,
-        }}
-      >
-        <div>
-          <p
-            style={{
-              margin: 0,
-              color: "var(--color-fg-subtle)",
-              fontSize: 11,
-              letterSpacing: 1.2,
-              textTransform: "uppercase",
-            }}
-          >
-            Signed in as
-          </p>
-          <p
-            style={{
-              margin: "4px 0 0",
-              color: "var(--color-fg)",
-              fontSize: 14,
-              fontWeight: 600,
-            }}
-          >
-            {session.user?.name ?? session.user?.email ?? "Unknown user"}
-          </p>
-          <p
-            style={{
-              margin: "2px 0 0",
-              color: "var(--color-fg-muted)",
-              fontSize: 12,
-            }}
-          >
-            via {session.source === "api-key" ? "API key" : "Email code"}
-          </p>
-        </div>
+    <main className="workspace-shell">
+      <Sidebar
+        sessionUser={session.user}
+        workspaces={workspaces}
+        workspace={workspace}
+        issues={issues}
+        selectedIssueId={selectedIssueId}
+        searchQuery={searchQuery}
+        workspacesLoading={workspacesQuery.isPending}
+        issuesLoading={issuesQuery.isPending}
+        workspacesError={workspacesQuery.error}
+        issuesError={issuesQuery.error}
+        sidebarOpen={sidebarOpen}
+        onWorkspaceChange={handleWorkspaceChange}
+        onIssueSelect={selectIssue}
+        onSearch={setSearchQuery}
+        onSignOut={handleSignOut}
+        onClose={() => setSidebarOpen(false)}
+      />
+      {sidebarOpen ? (
         <button
+          className="drawer-scrim"
           type="button"
-          onClick={handleSignOut}
-          style={{
-            alignSelf: "flex-start",
-            padding: "8px 12px",
-            background: "transparent",
-            color: "var(--color-fg-muted)",
-            border: "1px solid var(--color-border)",
-            borderRadius: "var(--radius-md)",
-            fontSize: 12,
-            cursor: "pointer",
-          }}
-        >
-          Sign out
-        </button>
-      </aside>
-
-      <section
-        style={{
-          flex: 1,
-          padding: 32,
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-          maxWidth: 720,
-        }}
-      >
-        <header>
-          <h1
-            style={{
-              margin: 0,
-              color: "var(--color-fg)",
-              fontSize: 22,
-            }}
-          >
-            Choose a workspace
-          </h1>
-          <p
-            style={{
-              margin: "4px 0 0",
-              color: "var(--color-fg-muted)",
-              fontSize: 13,
-            }}
-          >
-            Stage 2 data + session foundation is in place. Stage 3 will
-            replace this view with the full sidebar / channel UI.
-          </p>
-        </header>
-
-        {workspacesQuery.isPending ? (
-          <p style={{ color: "var(--color-fg-muted)" }}>Loading workspaces…</p>
-        ) : workspacesQuery.isError ? (
-          <p style={{ color: "var(--color-danger)" }}>
-            {(workspacesQuery.error as Error).message}
-          </p>
-        ) : workspacesQuery.data && workspacesQuery.data.length === 0 ? (
-          <p style={{ color: "var(--color-fg-muted)" }}>
-            You don&rsquo;t belong to any workspace on this backend.
-          </p>
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+        />
+      ) : null}
+      <section className="channel-panel" id="main-content">
+        <ChannelHeader
+          issue={selectedIssue}
+          detailsOpen={detailsOpen}
+          onOpenNavigation={() => setSidebarOpen(true)}
+          onToggleDetails={() => setDetailsOpen((open) => !open)}
+        />
+        {selectedIssue ? (
+          <>
+            <MessageList
+              issue={selectedIssue}
+              comments={visibleComments}
+              members={directory.members}
+              agents={directory.agents}
+              isLoading={commentsQuery.isPending}
+              error={commentsQuery.error}
+              onRetry={() => void commentsQuery.refetch()}
+            />
+            <MessageComposer
+              issueIdentifier={selectedIssue.identifier}
+              value={draftMap[selectedIssue.id] ?? ""}
+              pending={createComment.isPending}
+              error={createComment.error}
+              onChange={(value) => setDraft(selectedIssue.id, value)}
+              onSubmit={() => {
+                const content = (draftMap[selectedIssue.id] ?? "").trim();
+                if (content && !createComment.isPending) {
+                  createComment.mutate({ issueId: selectedIssue.id, content });
+                }
+              }}
+            />
+          </>
         ) : (
-          <ul
-            style={{
-              listStyle: "none",
-              margin: 0,
-              padding: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            {workspacesQuery.data?.map((ws) => {
-              const selected =
-                workspace?.workspaceId === ws.id ||
-                workspace?.workspaceSlug === ws.slug;
-              return (
-                <li key={ws.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (client) client.setWorkspace({
-                        workspaceId: ws.id,
-                        workspaceSlug: ws.slug,
-                      });
-                      setWorkspace({
-                        workspaceId: ws.id,
-                        workspaceSlug: ws.slug,
-                      });
-                    }}
-                    style={{
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "12px 14px",
-                      background: selected
-                        ? "var(--color-elevated)"
-                        : "transparent",
-                      color: "var(--color-fg)",
-                      border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
-                      borderRadius: "var(--radius-md)",
-                      cursor: "pointer",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 2,
-                    }}
-                  >
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>
-                      {ws.name}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        color: "var(--color-fg-muted)",
-                        fontFamily: "var(--font-mono)",
-                      }}
-                    >
-                      {ws.slug} · {ws.issue_prefix}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="content-state empty-main">
+            <Hash size={28} aria-hidden="true" />
+            <h2>Choose a channel</h2>
+            <p>Issues are presented as channels so the team can discuss work in context.</p>
+          </div>
         )}
       </section>
+      <RightSidebar
+        issue={selectedIssue}
+        members={directory.members}
+        agents={directory.agents}
+        membersLoading={membersQuery.isPending}
+        agentsLoading={agentsQuery.isPending}
+        participantsError={membersQuery.error ?? agentsQuery.error}
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+      />
     </main>
   );
 }
-
-// (No additional exports — Stage 3 will replace this shell.)
-export {};
