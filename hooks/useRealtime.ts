@@ -57,13 +57,14 @@ export function useRealtime(params: UseRealtimeParams): void {
     if (!session || !workspace) {
       managerRef.current?.disconnect();
       managerRef.current = null;
-      setRealtimeStatus("idle", { code: null, reason: "no session" });
+      setRealtimeStatus("idle");
       return;
     }
 
     const sessionKey = credentialFingerprint(session.token);
     const ctx: CacheContext = {
       workspaceId: workspace.workspaceId,
+      backendOrigin: session.backendOrigin,
       sessionKey,
     };
 
@@ -81,8 +82,8 @@ export function useRealtime(params: UseRealtimeParams): void {
     const unsubscribeEvents = manager.subscribe((event) => {
       applyRealtimeEvent(queryClient, ctx, event);
     });
-    const unsubscribeStatus = manager.subscribeStatus((status, reason) => {
-      setRealtimeStatus(status, reason);
+    const unsubscribeStatus = manager.subscribeStatus((status) => {
+      setRealtimeStatus(status);
     });
 
     manager.connect();
@@ -95,11 +96,7 @@ export function useRealtime(params: UseRealtimeParams): void {
         managerRef.current = null;
       }
     };
-    // We intentionally rebuild the manager when the session or
-    // workspace changes — the manager is short-lived and a new
-    // socket is the right way to switch contexts.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, workspace]);
+  }, [params.socketFactory, queryClient, session, workspace]);
 }
 
 /**

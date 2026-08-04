@@ -16,10 +16,15 @@ import { describe, expect, it, beforeEach } from "vitest";
 
 import { applyRealtimeEvent, type CacheContext } from "./query-updaters";
 import type { RealtimeEvent } from "./events-types";
-import type { WireComment, WireIssue } from "../types";
+import type { WireAgent, WireComment, WireIssue } from "../types";
 
 const SESSION_KEY = "tok-deadbeef";
-const CTX: CacheContext = { workspaceId: "ws-1", sessionKey: SESSION_KEY };
+const BACKEND_ORIGIN = "http://localhost:8080";
+const CTX: CacheContext = {
+  workspaceId: "ws-1",
+  backendOrigin: BACKEND_ORIGIN,
+  sessionKey: SESSION_KEY,
+};
 
 function makeClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -200,14 +205,18 @@ describe("applyRealtimeEvent", () => {
     expect(list).toHaveLength(1);
   });
 
-  it("comment:deleted removes by id and does not touch other issues", () => {
+  it("comment:deleted removes by id without touching other issues or sessions", () => {
     const issueA = "issue-A";
     const issueB = "issue-B";
+    const otherSession = "tok-other";
     queryClient.setQueryData(["comments", issueA, SESSION_KEY], [
       comment({ id: "c-1", issue_id: issueA }),
     ]);
     queryClient.setQueryData(["comments", issueB, SESSION_KEY], [
       comment({ id: "c-2", issue_id: issueB }),
+    ]);
+    queryClient.setQueryData(["comments", issueA, otherSession], [
+      comment({ id: "c-1", issue_id: issueA }),
     ]);
     applyRealtimeEvent(
       queryClient,
@@ -216,14 +225,18 @@ describe("applyRealtimeEvent", () => {
     );
     const a = queryClient.getQueryData(["comments", issueA, SESSION_KEY]) as WireComment[];
     const b = queryClient.getQueryData(["comments", issueB, SESSION_KEY]) as WireComment[];
+    const other = queryClient.getQueryData(["comments", issueA, otherSession]) as WireComment[];
     expect(a).toEqual([]);
     expect(b).toHaveLength(1);
+    expect(other).toHaveLength(1);
   });
 
-  it("reaction:added updates the right comment without duplicating", () => {
+  it("reaction:added updates the right comment without duplicating or crossing sessions", () => {
     const issueId = "33333333-3333-4333-8333-333333333333";
+    const otherSession = "tok-other";
     const target = comment({ id: "c-1", issue_id: issueId, reactions: [] });
     queryClient.setQueryData(["comments", issueId, SESSION_KEY], [target]);
+    queryClient.setQueryData(["comments", issueId, otherSession], [target]);
     const reaction = {
       id: "r-1",
       comment_id: "c-1",
@@ -244,7 +257,9 @@ describe("applyRealtimeEvent", () => {
       asEvent({ type: "reaction:added", payload: { reaction, comment_id: "c-1" } }),
     );
     const list = queryClient.getQueryData(["comments", issueId, SESSION_KEY]) as WireComment[];
+    const other = queryClient.getQueryData(["comments", issueId, otherSession]) as WireComment[];
     expect(list[0]?.reactions).toHaveLength(1);
+    expect(other[0]?.reactions).toHaveLength(0);
   });
 
   it("reaction:removed drops the matching reaction", () => {
@@ -317,6 +332,119 @@ describe("applyRealtimeEvent", () => {
     expect(agents).toHaveLength(2);
     const updated = agents.find((a) => a.id === "a-1");
     expect(updated?.status).toBe("working");
+  });
+
+  it("agent:archived removes the participant from the agents cache", () => {
+    const archived: WireAgent = {
+      id: "a-1",
+      workspace_id: CTX.workspaceId,
+      runtime_id: "rt-1",
+      name: "A",
+      description: "",
+      instructions: "",
+      avatar_url: null,
+      runtime_mode: "openclaw",
+      runtime_config: {},
+      custom_args: [],
+      mcp_config: {},
+      has_custom_env: false,
+      custom_env_key_count: 0,
+      mcp_config_redacted: false,
+      visibility: "workspace",
+      status: "idle",
+      max_concurrent_tasks: 1,
+      model: "test",
+      thinking_level: "low",
+      owner_id: "11111111-1111-4111-8111-111111111111",
+      skills: [],
+      created_at: "2026-08-04T11:00:00Z",
+      updated_at: "2026-08-04T12:00:00Z",
+      archived_at: "2026-08-04T12:00:00Z",
+      archived_by: "11111111-1111-4111-8111-111111111111",
+    };
+    queryClient.setQueryData(["agents", CTX.workspaceId, SESSION_KEY], [archived]);
+
+    applyRealtimeEvent(
+      queryClient,
+      CTX,
+      asEvent({ type: "agent:archived", payload: { agent: archived } }),
+    );
+
+    expect(
+      queryClient.getQueryData(["agents", CTX.workspaceId, SESSION_KEY]),
+    ).toEqual([]);
+  });
+
+  it("member:removed removes the participant from the members cache", () => {
+    const user = {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Member",
+      email: "member@example.com",
+      avatar_url: null,
+      language: "en",
+      timezone: "UTC",
+      onboarded_at: "2026-08-04T12:00:00Z",
+      onboarding_questionnaire: {},
+      starter_content_state: "complete",
+      profile_description: "",
+      created_at: "2026-08-04T12:00:00Z",
+      updated_at: "2026-08-04T12:00:00Z",
+    };
+    const member = {
+      id: "member-1",
+      user,
+      role: "member",
+      created_at: "2026-08-04T12:00:00Z",
+    };
+    queryClient.setQueryData(["members", CTX.workspaceId, SESSION_KEY], [member]);
+
+    applyRealtimeEvent(
+      queryClient,
+      CTX,
+      asEvent({ type: "member:removed", payload: { member, user } }),
+    );
+
+    expect(
+      queryClient.getQueryData(["members", CTX.workspaceId, SESSION_KEY]),
+    ).toEqual([]);
+  });
+
+  it("workspace:updated invalidates the active backend's workspace query only", () => {
+    const matchingKey = ["workspaces", BACKEND_ORIGIN, SESSION_KEY] as const;
+    const otherBackendKey = ["workspaces", "https://other.example", SESSION_KEY] as const;
+    queryClient.setQueryDefaults(matchingKey, { staleTime: Infinity });
+    queryClient.setQueryDefaults(otherBackendKey, { staleTime: Infinity });
+    queryClient.setQueryData(matchingKey, []);
+    queryClient.setQueryData(otherBackendKey, []);
+
+    expect(queryClient.getQueryState(matchingKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(otherBackendKey)?.isInvalidated).toBe(false);
+
+    applyRealtimeEvent(
+      queryClient,
+      CTX,
+      asEvent({
+        type: "workspace:updated",
+        payload: {
+          workspace: {
+            id: CTX.workspaceId,
+            name: "Acme",
+            slug: "acme",
+            description: null,
+            context: null,
+            settings: {},
+            repos: [],
+            issue_prefix: "ACME",
+            avatar_url: null,
+            created_at: "2026-08-04T12:00:00Z",
+            updated_at: "2026-08-04T12:00:00Z",
+          },
+        },
+      }),
+    );
+
+    expect(queryClient.getQueryState(matchingKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherBackendKey)?.isInvalidated).toBe(false);
   });
 
   it("does not touch a separate workspace's cache", () => {

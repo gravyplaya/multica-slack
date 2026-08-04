@@ -19,11 +19,10 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { useStore } from "zustand";
 
-import type { CloseReason, ConnectionStatus } from "./events-types";
+import type { ConnectionStatus } from "./events-types";
 
 export type RealtimeStoreState = {
   status: ConnectionStatus;
-  reason: CloseReason;
 };
 
 export type RealtimeStore = StoreApi<RealtimeStoreState>;
@@ -34,7 +33,6 @@ export function getRealtimeStore(): RealtimeStore {
   if (!store) {
     store = createStore<RealtimeStoreState>(() => ({
       status: "idle",
-      reason: { code: null, reason: "not started" },
     }));
   }
   return store;
@@ -42,21 +40,19 @@ export function getRealtimeStore(): RealtimeStore {
 
 /**
  * Update the connection status. Called by the `WebSocketManager`'s
- * status callback. Idempotent — setting the same value with the
- * same reason is a no-op so we do not wake subscribers for noise.
+ * status callback. Idempotent so repeated lifecycle notifications
+ * do not wake subscribers.
  */
-export function setRealtimeStatus(status: ConnectionStatus, reason: CloseReason): void {
+export function setRealtimeStatus(status: ConnectionStatus): void {
   const current = getRealtimeStore().getState();
-  if (current.status === status && current.reason.reason === reason.reason) {
+  if (current.status === status) {
     return;
   }
-  getRealtimeStore().setState({ status, reason });
+  getRealtimeStore().setState({ status });
 }
 
 /**
- * Read the current connection status. Re-renders when the status
- * changes; reason is intentionally not exposed so the indicator
- * does not reflow on every transient reason bump.
+ * Read the current connection status.
  */
 export function useRealtimeStatusFromStore(): ConnectionStatus {
   return useStore(getRealtimeStore(), (state) => state.status);

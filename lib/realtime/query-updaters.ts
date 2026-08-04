@@ -41,7 +41,6 @@ import type {
   WireComment,
   WireIssue,
   WireReaction,
-  WireUser,
   WireWorkspaceMember,
 } from "../types";
 import type { WireAgent } from "../types";
@@ -55,6 +54,7 @@ import type { RealtimeEvent } from "./events";
  */
 export interface CacheContext {
   workspaceId: string;
+  backendOrigin: string;
   sessionKey: string;
 }
 
@@ -116,21 +116,25 @@ export function applyRealtimeEvent(
       });
       return;
     case "agent:status":
-    case "agent:archived":
     case "agent:restored":
       upsertAgent(queryClient, ctx, event.payload.agent);
       return;
+    case "agent:archived":
+      removeAgent(queryClient, ctx, event.payload.agent.id);
+      return;
     case "member:added":
     case "member:updated":
+      upsertMember(queryClient, ctx, event.payload.member);
+      return;
     case "member:removed":
-      upsertMember(queryClient, ctx, event.payload.member, event.payload.user);
+      removeMember(queryClient, ctx, event.payload.member.id);
       return;
     case "workspace:updated":
       // Workspace metadata is rare; trigger a targeted refetch
       // rather than reach into the cache with a partial write.
       queryClient.invalidateQueries({
-        queryKey: ["workspaces", ctx.sessionKey],
-        exact: false,
+        queryKey: ["workspaces", ctx.backendOrigin, ctx.sessionKey],
+        exact: true,
       });
       return;
   }
@@ -154,6 +158,14 @@ function agentListKey(ctx: CacheContext): readonly unknown[] {
 }
 function memberListKey(ctx: CacheContext): readonly unknown[] {
   return ["members", ctx.workspaceId, ctx.sessionKey];
+}
+
+function isSessionScopedCommentKey(
+  key: readonly unknown[],
+  prefix: "comments" | "commentsView",
+  sessionKey: string,
+): boolean {
+  return key.length === 3 && key[0] === prefix && key[2] === sessionKey;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,15 +260,17 @@ function removeComment(
   ctx: CacheContext,
   commentId: string,
 ): void {
-  // We don't know which issue the comment lived on without a
-  // lookup; iterate every `comments` key. In production the cache
-  // holds one key per issue, so a single sweep is bounded.
+  // The wire deletion frame carries only `comment_id`, not the
+  // owning `issue_id`, so the cache key cannot be targeted directly.
+  // TODO(realtime-contract): include `issue_id` on comment deletion
+  // frames; until then this is O(cached channels) and grows with the
+  // number of channel comment lists retained by TanStack Query.
   const wireQueries = queryClient
     .getQueryCache()
     .findAll({ queryKey: ["comments"] });
   for (const query of wireQueries) {
     const match = query.queryKey;
-    if (!Array.isArray(match) || match[0] !== "comments") continue;
+    if (!isSessionScopedCommentKey(match, "comments", ctx.sessionKey)) continue;
     queryClient.setQueryData<WireComment[] | undefined>(match, (current) => {
       if (!current) return current;
       return current.filter((comment) => comment.id !== commentId);
@@ -267,15 +281,12 @@ function removeComment(
     .findAll({ queryKey: ["commentsView"] });
   for (const query of viewQueries) {
     const match = query.queryKey;
-    if (!Array.isArray(match) || match[0] !== "commentsView") continue;
+    if (!isSessionScopedCommentKey(match, "commentsView", ctx.sessionKey)) continue;
     queryClient.setQueryData<CommentView[] | undefined>(match, (current) => {
       if (!current) return current;
       return current.filter((comment) => comment.id !== commentId);
     });
   }
-  // `ctx` is required by the dispatcher but unused here; we keep
-  // the parameter for symmetry with the rest of the updaters.
-  void ctx;
 }
 
 function mapCommentSafe(wire: WireComment): CommentView | null {
@@ -299,8 +310,11 @@ function mapCommentSafe(wire: WireComment): CommentView | null {
  *
  * The match is intentionally narrow — same author + same content —
  * which is the strongest signal we have before the server hands us
- * a client-correlation id. A future protocol change can tighten
- * this further by providing a `client_id` field on the wire frame.
+ * a client-correlation id. Two identical messages sent back-to-back
+ * by the same author can therefore reconcile the wrong placeholder;
+ * the next authoritative refetch corrects that MVP limitation. A
+ * future protocol change can make the match exact by providing a
+ * `client_id` field on the wire frame.
  *
  * The heuristic only fires when the *incoming* id is a server-issued
  * one (i.e. not prefixed with `optimistic-`). An incoming optimistic
@@ -359,12 +373,11 @@ function upsertReaction(
   target: ReactionTarget,
 ): void {
   if (target.scope === "comment") {
-    // The reaction payload carries `comment_id` but no `issue_id`,
-    // and the per-issue `["comments", issueId, sessionKey]` cache
-    // key is keyed by issue. Sweep every cached comments list and
-    // let `rewriteCommentReactions` skip the ones without a match —
-    // production holds one key per issue, so the sweep is bounded.
-    sweepCommentReactions(queryClient, target.reaction, true);
+    // Comment reaction frames likewise omit `issue_id`. Until the
+    // wire contract includes it, each event must scan the retained
+    // channel comment caches (O(cached channels)).
+    // TODO(realtime-contract): include `issue_id` on reaction frames.
+    sweepCommentReactions(queryClient, ctx, target.reaction, true);
   } else {
     // Issue reactions are surfaced on the sidebar; stamp them onto
     // the cached wire issue so the chip updates.
@@ -394,7 +407,7 @@ function removeReaction(
   target: ReactionTarget,
 ): void {
   if (target.scope === "comment") {
-    sweepCommentReactions(queryClient, target.reaction, false);
+    sweepCommentReactions(queryClient, ctx, target.reaction, false);
   } else {
     const matching = issueDetailKey(ctx, target.scopeId);
     queryClient.setQueryData<WireIssue | undefined>(matching, (current) => {
@@ -421,13 +434,13 @@ function removeReaction(
 /**
  * Walk every cached `["comments", issueId, sessionKey]` key and
  * apply the reaction update to the comment whose id matches
- * `reaction.comment_id`. Production holds one key per opened
- * channel, so the sweep is bounded; the per-list `rewrite*`
- * guard ensures we only touch entries that actually contain the
- * comment.
+ * `reaction.comment_id`. This is O(cached channels) because the
+ * current reaction frame omits `issue_id`; the per-list `rewrite*`
+ * guard ensures we only touch entries that contain the comment.
  */
 function sweepCommentReactions(
   queryClient: QueryClient,
+  ctx: CacheContext,
   reaction: WireReaction,
   add: boolean,
 ): void {
@@ -436,7 +449,7 @@ function sweepCommentReactions(
     .findAll({ queryKey: ["comments"] });
   for (const query of wireQueries) {
     const match = query.queryKey;
-    if (!Array.isArray(match) || match[0] !== "comments") continue;
+    if (!isSessionScopedCommentKey(match, "comments", ctx.sessionKey)) continue;
     rewriteCommentReactions(match, queryClient, reaction, add);
   }
 }
@@ -497,11 +510,22 @@ function upsertAgent(
   });
 }
 
+function removeAgent(
+  queryClient: QueryClient,
+  ctx: CacheContext,
+  agentId: string,
+): void {
+  const key = agentListKey(ctx);
+  queryClient.setQueryData<WireAgent[] | undefined>(key, (current) => {
+    if (!current) return current;
+    return current.filter((agent) => agent.id !== agentId);
+  });
+}
+
 function upsertMember(
   queryClient: QueryClient,
   ctx: CacheContext,
   member: WireWorkspaceMember,
-  user: WireUser,
 ): void {
   const key = memberListKey(ctx);
   queryClient.setQueryData<WireWorkspaceMember[] | undefined>(key, (current) => {
@@ -510,15 +534,17 @@ function upsertMember(
     next.push(member);
     return next;
   });
-  // The user projection is what the sidebar renders. Stamp it into
-  // a parallel `usersView` cache so the participant chip updates
-  // without re-fetching the members list.
-  const userKey = ["usersView", ctx.workspaceId, ctx.sessionKey] as const;
-  queryClient.setQueryData<WireUser[] | undefined>(userKey, (current) => {
-    if (!current) return [user];
-    const next = current.filter((row) => row.id !== user.id);
-    next.push(user);
-    return next;
+}
+
+function removeMember(
+  queryClient: QueryClient,
+  ctx: CacheContext,
+  memberId: string,
+): void {
+  const key = memberListKey(ctx);
+  queryClient.setQueryData<WireWorkspaceMember[] | undefined>(key, (current) => {
+    if (!current) return current;
+    return current.filter((row) => row.id !== memberId);
   });
 }
 

@@ -24,8 +24,11 @@
  */
 
 import { useRealtimeStatus } from "../../hooks/useRealtime";
+import type { ConnectionStatus } from "../../lib/realtime/events-types";
 
-const STATUS_LABEL: Record<string, string> = {
+type VisibleConnectionStatus = Exclude<ConnectionStatus, "idle" | "closed">;
+
+const STATUS_LABEL: Record<VisibleConnectionStatus, string> = {
   connecting: "Connecting…",
   connected: "Live",
   reconnecting: "Reconnecting…",
@@ -43,7 +46,7 @@ export function ConnectionIndicator() {
       />
     );
   }
-  const label = STATUS_LABEL[status] ?? "";
+  const label = STATUS_LABEL[status];
   return (
     <span
       className="connection-indicator"
