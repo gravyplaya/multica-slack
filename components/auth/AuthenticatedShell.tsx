@@ -21,6 +21,7 @@ import {
   removeOptimisticComment,
 } from "../../lib/chat/optimistic-comments";
 import { useSession, useSessionStore } from "../../lib/auth/use-session";
+import { useRealtime } from "../../hooks/useRealtime";
 import { useViewStore } from "../../lib/stores/use-view-store";
 import type {
   AgentView,
@@ -86,6 +87,12 @@ export function AuthenticatedShell() {
   const sessionKey = session
     ? credentialFingerprint(session.token)
     : "signed-out";
+
+  // Mount the realtime manager. The hook owns its own lifecycle;
+  // it tears down on session/workspace change or unmount and the
+  // already-loaded views keep rendering even when the socket is
+  // disconnected (the indicator is the only UI change).
+  useRealtime({ session, workspace: selectedWorkspace });
   const workspacesQuery = useQuery({
     queryKey: ["workspaces", session?.backendOrigin ?? "", sessionKey],
     queryFn: () => client.listWorkspaces(),
