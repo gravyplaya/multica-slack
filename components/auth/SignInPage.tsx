@@ -18,7 +18,7 @@
  * routing forward once `onSession` fires.
  */
 
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 
 import { ApiKeySignInForm } from "./ApiKeySignInForm";
 import { OAuthSignInForm } from "./OAuthSignInForm";
@@ -27,6 +27,8 @@ import { useMulticaClient } from "../../hooks/use-multica-client";
 import type { SessionState } from "../../lib/types";
 
 const ACK_KEY = "multica-slack:api-key-acknowledged";
+const NOOP_SUBSCRIBE = () => () => undefined;
+const ACKNOWLEDGED_SERVER_SNAPSHOT = () => true;
 
 function readAcknowledgement(origin: string): boolean {
   if (typeof window === "undefined") return true; // SSR: never nag.
@@ -56,11 +58,16 @@ export function SignInPage({
   onSession,
   backendOrigin = API_BASE_URL,
 }: SignInPageProps) {
-  // The acknowledgement flag reads from sessionStorage once at
-  // mount. We deliberately do NOT subscribe to storage changes —
-  // the acknowledgement only needs to be evaluated when the page
-  // mounts for the first time per backend origin.
-  const [acknowledged] = useState(() => readAcknowledgement(backendOrigin));
+  // `getServerSnapshot` also supplies the first hydration snapshot, so
+  // both renders omit the browser-only note. React then reads
+  // sessionStorage immediately after hydration and updates only when
+  // that value differs. No subscription is needed: this flag changes
+  // only when the page mounts for a backend origin.
+  const acknowledged = useSyncExternalStore(
+    NOOP_SUBSCRIBE,
+    () => readAcknowledgement(backendOrigin),
+    ACKNOWLEDGED_SERVER_SNAPSHOT,
+  );
 
   // `useMulticaClient()` always returns a `MulticaClient`: the
   // provider mounts a placeholder when no session exists, and both

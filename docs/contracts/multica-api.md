@@ -19,7 +19,7 @@
 | REST | `http://localhost:8080` | `NEXT_PUBLIC_MULTICA_API` |
 | WebSocket | `ws://localhost:8080/ws` | `NEXT_PUBLIC_MULTICA_WS` |
 
-The default Next.js dev origin (`http://localhost:3000`) is allowed by the backend CORS list. Production deployments must set `CORS_ALLOWED_ORIGINS` (comma-separated) on the Multica server before pointing a public browser origin at it.
+The default Next.js dev origin (`http://localhost:3000`) is allowed by the backend CORS list. Production deployments must set `CORS_ALLOWED_ORIGINS` (comma-separated) on the Multica server before pointing a public browser origin at it. The client config module promotes `ws://` → `wss://` automatically when `NEXT_PUBLIC_MULTICA_API` is an `https://` origin, so a TLS backend never receives a mixed-content WebSocket handshake; local self-host (`http://` + `ws://`) is left unchanged.
 
 ### 1.2 Headers
 

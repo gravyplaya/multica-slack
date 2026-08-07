@@ -28,7 +28,21 @@ pnpm run start          # serve the production build
 pnpm run lint           # ESLint
 pnpm run typecheck      # tsc --noEmit
 pnpm run validate:fixtures  # sanity-check docs/contracts/fixtures/ against manifest.json
+pnpm run smoke:ws       # live WebSocket handshake smoke test (Phase 0 verification)
 pnpm run verify         # fixture check + typecheck + lint + build (full Stage 1 gate)
+```
+
+### WebSocket smoke test
+
+`pnpm run smoke:ws` dials the configured backend `/ws`, sends the auth frame,
+and asserts `auth_ack` comes back. It is the verification gate for the Phase 0
+CORS/origin fix: before the backend's `CORS_ALLOWED_ORIGINS` includes the
+frontend origin, the upgrade is rejected (close 1006); after the fix, the
+handshake completes.
+
+```bash
+pnpm run smoke:ws -- --token <jwt|PAT> --workspace <id|slug> \
+  [--ws-url wss://api.multica.ai/ws] [--origin http://localhost:3000]
 ```
 
 Vitest unit tests cover the typed-data, client, redaction, API-key
@@ -99,6 +113,8 @@ All variables are public (`NEXT_PUBLIC_*`) so the browser can read them at build
 | --- | --- | --- |
 | `NEXT_PUBLIC_MULTICA_API` | REST API base URL (no trailing `/api`) | `http://localhost:8080` |
 | `NEXT_PUBLIC_MULTICA_WS` | WebSocket URL (matches the `MULTICA_PUBLIC_URL` host) | `ws://localhost:8080/ws` |
+
+The config module promotes `ws://` → `wss://` automatically when `NEXT_PUBLIC_MULTICA_API` is an `https://` origin, so a TLS backend never receives a mixed-content WebSocket handshake. Local self-host (`http://` + `ws://`) is left unchanged.
 
 See `.env.example` for the checked-in template.
 
